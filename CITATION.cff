@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use Dental DICOMator, cite this software and the original DICOMator article."
+title: "Dental DICOMator"
+type: software
+authors:
+  - family-names: "Bertolini"
+    given-names: "Mateus"
+version: "1.0.7"
+date-released: "2026-09-02"
+license: "GPL-3.0-or-later"
+repository-code: "https://github.com/Mateusbertolini/Dental-DICOMator"
+url: "https://github.com/Mateusbertolini/Dental-DICOMator"
+abstract: >-
+  Blender extension adapted from DICOMator for generating synthetic dental
+  DICOM CT/CBCT-like series from 3D mesh models, with dental materials and
+  weight-painted tissue behavior.
+keywords: [DICOM, CBCT, dentistry, Blender, synthetic imaging, dental education]
+

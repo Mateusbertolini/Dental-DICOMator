@@ -253,9 +253,19 @@ potential, acquisition geometry, reconstruction kernel, object size, beam
 hardening, partial-volume effects, and metal saturation. Validate results for
 each research or teaching application.
 
+## Citation
+
+Use GitHub's **Cite this repository** menu to cite the software version; citation metadata are in CITATION.cff. Please also cite the original DICOMator article:
+
+Douglass MJJ. An open-source tool for converting 3D mesh volumes into synthetic DICOM CT images for medical physics research. Physical and Engineering Sciences in Medicine. 2025;48:1525-1538. https://doi.org/10.1007/s13246-025-01599-x
+
+## Contributing and reporting problems
+
+See CONTRIBUTING.md and the GitHub issue templates. Submit only synthetic or fully de-identified examples; never upload PHI or identifiable clinical data. See SECURITY.md for confidential reports and CHANGELOG.md for release history.
 ## Authors and license
 
 Dental adaptation developed by **Mateus Bertolini**, adapted from
 **DICOMATOR** developed by **Michael Douglass**.
 
-Licensed under the GNU General Public License v3.0 or later. See `LICENSE`.
+Licensed under the GNU General Public License v3.0 or later. See LICENSE and NOTICE.md.
+
