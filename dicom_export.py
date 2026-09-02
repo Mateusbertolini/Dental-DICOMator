@@ -1,0 +1,486 @@
+"""DICOM export helpers used by the DICOMator add-on."""
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from typing import Callable, Generator, Optional, Sequence
+
+import numpy as np
+from mathutils import Vector
+
+from . import constants as shared_constants
+from .constants import (
+    AIR_DENSITY,
+    DEFAULT_DENSITY,
+    MAX_HU_VALUE,
+    MIN_HU_VALUE,
+    MODALITY_MRI_T1,
+    MR_SEQUENCE_PARAMETERS,
+    apply_synthetic_metadata,
+    format_ds,
+    format_ds_sequence,
+    normalize_dicom_date,
+    resolve_positive_voxel_size,
+    truncate_lo,
+    truncate_pn,
+    truncate_sh,
+    validate_numeric_array,
+)
+
+SliceProgressCallback = Optional[Callable[[int, int], None]]
+ExportGenerator = Generator[tuple[int, int], None, dict]
+
+
+def export_voxel_grid_to_dicom(
+    voxel_grid: np.ndarray,
+    voxel_size: Sequence[float] | float,
+    output_dir: str,
+    bbox_min: Vector,
+    *,
+    progress_callback: SliceProgressCallback = None,
+    **kwargs,
+) -> dict[str, str]:
+    """Export ``voxel_grid`` to a folder of DICOM slices.
+
+    Blocking wrapper around :func:`export_voxel_grid_to_dicom_iter`; see that
+    function for the keyword arguments.
+    """
+    generator = export_voxel_grid_to_dicom_iter(voxel_grid, voxel_size, output_dir, bbox_min, **kwargs)
+    while True:
+        try:
+            current, total = next(generator)
+        except StopIteration as stop:
+            return stop.value
+        if progress_callback:
+            progress_callback(current, total)
+
+
+def export_voxel_grid_to_dicom_iter(
+    voxel_grid: np.ndarray,
+    voxel_size: Sequence[float] | float,
+    output_dir: str,
+    bbox_min: Vector,
+    *,
+    patient_name: str = "Anonymous",
+    patient_id: str = "12345678",
+    patient_sex: str = "M",
+    patient_birth_date: str = "",
+    series_description: str = "CT Series from DICOMator",
+    direct_hu: bool = False,
+    patient_position: str = "HFS",
+    dicom_modality: str = "CT",
+    mr_weighting: Optional[str] = None,
+    study_id: str = "1",
+    accession_number: str = "1",
+    study_datetime: Optional[datetime] = None,
+    study_instance_uid: Optional[str] = None,
+    frame_of_reference_uid: Optional[str] = None,
+    series_instance_uid: Optional[str] = None,
+    series_number: int = 1,
+    temporal_position_identifier: Optional[int] = None,
+    number_of_temporal_positions: Optional[int] = None,
+    phase_index: Optional[int] = None,
+    temporal_position_index: Optional[int] = None,
+    derivation_description: Optional[str] = None,
+) -> ExportGenerator:
+    """Export ``voxel_grid`` to DICOM slices, yielding per-slice progress.
+
+    Yields ``(slices_written, total_slices)`` after each slice and returns the
+    result dict (``{'success': ...}`` or ``{'error': ...}``).
+
+    ``mr_weighting`` selects the emitted MR acquisition parameters (TR/TE,
+    echo train) so the metadata matches the T1/T2 intensity preset;
+    ``study_datetime`` lets callers share one timestamp across co-exported
+    series so Study/Series/Content times agree between objects.
+    """
+    if not shared_constants.ensure_pydicom_available():
+        return {'error': 'pydicom not available'}
+
+    pydicom = shared_constants.pydicom
+    Dataset = shared_constants.Dataset
+    FileDataset = shared_constants.FileDataset
+    generate_uid = shared_constants.generate_uid
+
+    modality = str(dicom_modality or "CT").upper()
+    if modality not in {"CT", "MR"}:
+        modality = "CT"
+
+    try:
+        source_grid = validate_numeric_array(voxel_grid, name="voxel_grid", ndim=3)
+        vx_m, vy_m, vz_m = resolve_positive_voxel_size(voxel_size)
+        bbox_components = [float(bbox_min.x), float(bbox_min.y), float(bbox_min.z)]
+        if not all(np.isfinite(component) for component in bbox_components):
+            raise ValueError("bbox_min components must be finite")
+    except (AttributeError, TypeError, ValueError) as exc:
+        return {'error': str(exc)}
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    current_datetime = study_datetime or datetime.now()
+    date_str = current_datetime.strftime('%Y%m%d')
+    time_str = current_datetime.strftime('%H%M%S.%f')
+
+    num_slices = source_grid.shape[2]
+    if direct_hu:
+        # Clip before casting so values outside int16 cannot wrap around.
+        hu_grid = np.clip(source_grid, MIN_HU_VALUE, MAX_HU_VALUE).astype(
+            np.int16, copy=False
+        )
+    else:
+        hu_grid = np.where(source_grid > 0, DEFAULT_DENSITY, AIR_DENSITY).astype(
+            np.int16, copy=False
+        )
+    # Unit Scale 0.001 means voxel sizes and coordinates are already mm.
+    vx_mm, vy_mm, vz_mm = vx_m, vy_m, vz_m
+
+    bbox_min_mm = Vector(tuple(bbox_components))
+
+    study_instance_uid = study_instance_uid or generate_uid()
+    frame_of_reference_uid = frame_of_reference_uid or generate_uid()
+    series_instance_uid = series_instance_uid or generate_uid()
+
+    common_metadata = {
+        'study_instance_uid': study_instance_uid,
+        'frame_of_reference_uid': frame_of_reference_uid,
+        'series_instance_uid': series_instance_uid,
+        'series_number': series_number,
+        'series_description': truncate_lo(series_description, "DICOMator Export"),
+        'patient_name': truncate_pn(patient_name, "Anonymous"),
+        'patient_id': truncate_lo(patient_id, "12345678"),
+        'patient_sex': patient_sex,
+        'date_str': date_str,
+        'time_str': time_str,
+    }
+
+    slice_sop_instance_uids: list[str] = []
+    storage_uid = pydicom.uid.CTImageStorage if modality == "CT" else pydicom.uid.MRImageStorage
+
+    for index in range(num_slices):
+        slice_data = hu_grid[:, :, index]
+        try:
+            file_meta = Dataset()
+            file_meta.MediaStorageSOPClassUID = storage_uid
+            sop_instance_uid = generate_uid()
+            file_meta.MediaStorageSOPInstanceUID = sop_instance_uid
+            slice_sop_instance_uids.append(sop_instance_uid)
+            file_meta.ImplementationClassUID = pydicom.uid.PYDICOM_IMPLEMENTATION_UID
+            file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+
+            dataset = FileDataset(None, {}, file_meta=file_meta, preamble=b"\0" * 128)
+            dataset.ImageType = (
+                ['DERIVED', 'PRIMARY', 'AXIAL']
+                if modality == "CT"
+                else ['DERIVED', 'PRIMARY', 'OTHER']
+            )
+            dataset.SOPClassUID = file_meta.MediaStorageSOPClassUID
+            dataset.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
+            apply_synthetic_metadata(
+                dataset,
+                derivation_description
+                or f"Synthetic {modality} image voxelized from Blender geometry",
+            )
+
+            dataset.PatientName = common_metadata['patient_name']
+            dataset.PatientID = common_metadata['patient_id']
+            dataset.PatientBirthDate = normalize_dicom_date(patient_birth_date)
+            dataset.PatientSex = common_metadata['patient_sex']
+            dataset.PatientPosition = str(patient_position)
+
+            dataset.StudyInstanceUID = common_metadata['study_instance_uid']
+            dataset.FrameOfReferenceUID = common_metadata['frame_of_reference_uid']
+            dataset.PositionReferenceIndicator = ''
+            dataset.StudyID = truncate_sh(study_id, '1')
+            dataset.AccessionNumber = truncate_sh(accession_number, '1')
+            dataset.StudyDate = common_metadata['date_str']
+            dataset.StudyTime = common_metadata['time_str']
+            dataset.ReferringPhysicianName = ''
+
+            dataset.SeriesInstanceUID = common_metadata['series_instance_uid']
+            dataset.SeriesNumber = common_metadata['series_number']
+            dataset.SeriesDescription = common_metadata['series_description']
+            dataset.SeriesDate = common_metadata['date_str']
+            dataset.SeriesTime = common_metadata['time_str']
+
+            if number_of_temporal_positions is not None:
+                dataset.NumberOfTemporalPositions = int(number_of_temporal_positions)
+            if temporal_position_index is not None:
+                dataset.TemporalPositionIndex = int(temporal_position_index)
+            if temporal_position_identifier is not None:
+                dataset.TemporalPositionIdentifier = int(temporal_position_identifier)
+
+            dataset.Modality = modality
+            if modality == "CT":
+                # KVP is Type 2 in the CT Image module (PS3.3 C.8.2.1);
+                # validators flag its absence. 120 kVp is a typical setting.
+                dataset.KVP = '120'
+            if modality == "MR":
+                # MR Image module (PS3.3 C.8.3.1) Type 1/2 attributes using
+                # spin-echo parameters representative of the selected T1/T2
+                # weighting preset so the metadata matches the intensities.
+                sequence = MR_SEQUENCE_PARAMETERS.get(
+                    mr_weighting, MR_SEQUENCE_PARAMETERS[MODALITY_MRI_T1]
+                )
+                dataset.ScanningSequence = 'SE'
+                dataset.SequenceVariant = sequence['SequenceVariant']
+                dataset.ScanOptions = ''
+                dataset.MRAcquisitionType = '3D'
+                dataset.RepetitionTime = sequence['RepetitionTime']
+                dataset.EchoTime = sequence['EchoTime']
+                dataset.EchoTrainLength = sequence['EchoTrainLength']
+                dataset.EchoNumbers = '1'
+                dataset.ImagedNucleus = '1H'
+                dataset.MagneticFieldStrength = '1.5'
+            dataset.Manufacturer = 'DICOMator'
+            dataset.InstitutionName = 'Virtual Hospital'
+            dataset.StationName = 'Blender'
+
+            dataset.InstanceNumber = index + 1
+            dataset.AcquisitionNumber = int(phase_index or 1)
+            dataset.ContentDate = common_metadata['date_str']
+            dataset.ContentTime = common_metadata['time_str']
+            dataset.AcquisitionDate = common_metadata['date_str']
+            dataset.AcquisitionTime = common_metadata['time_str']
+
+            # Per DICOM PS3.3 C.7.6.2.1.1, ImagePositionPatient is the center
+            # of the first transmitted voxel, not the grid corner.
+            slice_z_center_mm = bbox_min_mm.z + (index + 0.5) * vz_mm
+            dataset.ImagePositionPatient = format_ds_sequence((
+                bbox_min_mm.x + 0.5 * vx_mm,
+                bbox_min_mm.y + 0.5 * vy_mm,
+                slice_z_center_mm,
+            ))
+            dataset.ImageOrientationPatient = format_ds_sequence(
+                (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+            )
+            dataset.SliceLocation = format_ds(slice_z_center_mm)
+            dataset.SliceThickness = format_ds(vz_mm)
+            dataset.SpacingBetweenSlices = format_ds(vz_mm)
+
+            pixel_array = slice_data.T.astype(np.int16, copy=False)
+            rows, cols = pixel_array.shape
+            dataset.SamplesPerPixel = 1
+            dataset.PhotometricInterpretation = 'MONOCHROME2'
+            dataset.Rows = int(rows)
+            dataset.Columns = int(cols)
+            dataset.PixelSpacing = format_ds_sequence((vy_mm, vx_mm))
+            dataset.BitsAllocated = 16
+            dataset.BitsStored = 16
+            dataset.HighBit = 15
+            dataset.PixelRepresentation = 1
+            if modality == "CT":
+                # Rescale attributes belong to the CT Image module; the MR
+                # Image IOD does not include them.
+                dataset.RescaleIntercept = format_ds(0.0)
+                dataset.RescaleSlope = format_ds(1.0)
+                dataset.RescaleType = 'HU'
+            if modality == "MR":
+                dataset.WindowCenter = 128
+                dataset.WindowWidth = 256
+            else:
+                dataset.WindowCenter = 40
+                dataset.WindowWidth = 400
+            dataset.PixelData = pixel_array.tobytes()
+
+            if phase_index is not None:
+                filename = os.path.join(output_dir, f"Phase_{int(phase_index):03d}_{modality}_Slice_{index + 1:04d}.dcm")
+            else:
+                filename = os.path.join(output_dir, f"{modality}_Slice_{index + 1:04d}.dcm")
+
+            dataset.save_as(filename, enforce_file_format=True)
+
+            yield index + 1, num_slices
+        except Exception as exc:  # pragma: no cover - Blender runtime feedback
+            print(f"Error saving DICOM file for slice {index + 1}: {exc}")
+            return {'error': f"Error saving DICOM file for slice {index + 1}: {exc}"}
+
+    return {
+        'success': f"Successfully exported {num_slices} DICOM slices to {output_dir}",
+        'sop_class_uid': str(storage_uid),
+        'sop_instance_uids': slice_sop_instance_uids,
+    }
+
+
+def export_projection_to_dicom(
+    projection_image: np.ndarray,
+    output_dir: str,
+    *,
+    filename: str = "DRR_Image_0001.dcm",
+    patient_name: str = "Anonymous",
+    patient_id: str = "12345678",
+    patient_sex: str = "M",
+    patient_birth_date: str = "",
+    patient_position: str = "HFS",
+    series_description: str = "DRR from DICOMator",
+    study_id: str = "1",
+    accession_number: str = "1",
+    study_datetime: Optional[datetime] = None,
+    pixel_spacing_mm: Optional[Sequence[float]] = None,
+    image_position_patient: Optional[Sequence[float]] = None,
+    image_orientation_patient: Optional[Sequence[float]] = None,
+    study_instance_uid: Optional[str] = None,
+    frame_of_reference_uid: Optional[str] = None,
+    series_instance_uid: Optional[str] = None,
+    series_number: int = 1,
+    instance_number: int = 1,
+    temporal_position_identifier: Optional[int] = None,
+    temporal_position_index: Optional[int] = None,
+    number_of_temporal_positions: Optional[int] = None,
+    derivation_description: Optional[str] = None,
+) -> dict[str, str]:
+    """Export a single DRR projection image to DICOM secondary capture."""
+
+    if not shared_constants.ensure_pydicom_available():
+        return {'error': 'pydicom not available'}
+
+    pydicom = shared_constants.pydicom
+    Dataset = shared_constants.Dataset
+    FileDataset = shared_constants.FileDataset
+    generate_uid = shared_constants.generate_uid
+
+    try:
+        image_2d = validate_numeric_array(
+            projection_image,
+            name="projection_image",
+            ndim=2,
+        )
+        if pixel_spacing_mm is not None:
+            if len(pixel_spacing_mm) != 2:
+                raise ValueError("pixel_spacing_mm must contain two values")
+            spacing = [float(value) for value in pixel_spacing_mm]
+            if not all(np.isfinite(value) and value > 0.0 for value in spacing):
+                raise ValueError("pixel_spacing_mm values must be finite and greater than zero")
+        else:
+            spacing = None
+        if image_position_patient is not None:
+            if len(image_position_patient) != 3:
+                raise ValueError("image_position_patient must contain three values")
+            position = [float(value) for value in image_position_patient]
+            if not all(np.isfinite(value) for value in position):
+                raise ValueError("image_position_patient values must be finite")
+        else:
+            position = None
+        if image_orientation_patient is not None:
+            if len(image_orientation_patient) != 6:
+                raise ValueError("image_orientation_patient must contain six values")
+            orientation = [float(value) for value in image_orientation_patient]
+            if not all(np.isfinite(value) for value in orientation):
+                raise ValueError("image_orientation_patient values must be finite")
+        else:
+            orientation = None
+    except (TypeError, ValueError) as exc:
+        return {'error': str(exc)}
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    if image_2d.dtype != np.uint16:
+        image_2d = np.clip(image_2d, 0, 65535).astype(np.uint16, copy=False)
+
+    current_datetime = study_datetime or datetime.now()
+    date_str = current_datetime.strftime('%Y%m%d')
+    time_str = current_datetime.strftime('%H%M%S.%f')
+
+    study_instance_uid = study_instance_uid or generate_uid()
+    frame_of_reference_uid = frame_of_reference_uid or generate_uid()
+    series_instance_uid = series_instance_uid or generate_uid()
+
+    try:
+        file_meta = Dataset()
+        file_meta.MediaStorageSOPClassUID = pydicom.uid.SecondaryCaptureImageStorage
+        file_meta.MediaStorageSOPInstanceUID = generate_uid()
+        file_meta.ImplementationClassUID = pydicom.uid.PYDICOM_IMPLEMENTATION_UID
+        file_meta.TransferSyntaxUID = pydicom.uid.ExplicitVRLittleEndian
+
+        dataset = FileDataset(None, {}, file_meta=file_meta, preamble=b"\0" * 128)
+        dataset.SOPClassUID = file_meta.MediaStorageSOPClassUID
+        dataset.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
+        dataset.ImageType = ['DERIVED', 'PRIMARY', 'DRR']
+        dataset.ConversionType = 'SYN'
+        apply_synthetic_metadata(
+            dataset,
+            derivation_description
+            or 'Digital radiograph reconstruction from voxelized Blender geometry',
+        )
+
+        dataset.PatientName = truncate_pn(patient_name, "Anonymous")
+        dataset.PatientID = truncate_lo(patient_id, "12345678")
+        dataset.PatientBirthDate = normalize_dicom_date(patient_birth_date)
+        dataset.PatientSex = patient_sex
+        dataset.PatientPosition = str(patient_position)
+
+        dataset.StudyInstanceUID = study_instance_uid
+        dataset.FrameOfReferenceUID = frame_of_reference_uid
+        dataset.PositionReferenceIndicator = ''
+        dataset.StudyID = truncate_sh(study_id, '1')
+        dataset.AccessionNumber = truncate_sh(accession_number, '1')
+        dataset.StudyDate = date_str
+        dataset.StudyTime = time_str
+        dataset.ReferringPhysicianName = ''
+
+        dataset.SeriesInstanceUID = series_instance_uid
+        dataset.SeriesNumber = int(series_number)
+        dataset.SeriesDescription = truncate_lo(series_description, "DRR from DICOMator")
+        dataset.SeriesDate = date_str
+        dataset.SeriesTime = time_str
+
+        if number_of_temporal_positions is not None:
+            dataset.NumberOfTemporalPositions = int(number_of_temporal_positions)
+        if temporal_position_index is not None:
+            dataset.TemporalPositionIndex = int(temporal_position_index)
+        if temporal_position_identifier is not None:
+            dataset.TemporalPositionIdentifier = int(temporal_position_identifier)
+
+        dataset.Modality = 'OT'
+        dataset.Manufacturer = 'DICOMator'
+        dataset.InstitutionName = 'Virtual Hospital'
+        dataset.StationName = 'Blender'
+        dataset.BurnedInAnnotation = 'NO'
+
+        dataset.InstanceNumber = int(instance_number)
+        dataset.AcquisitionNumber = int(temporal_position_identifier or 1)
+        dataset.ContentDate = date_str
+        dataset.ContentTime = time_str
+        dataset.AcquisitionDate = date_str
+        dataset.AcquisitionTime = time_str
+
+        if position is not None:
+            dataset.ImagePositionPatient = format_ds_sequence(position)
+        if orientation is not None:
+            dataset.ImageOrientationPatient = format_ds_sequence(orientation)
+        if spacing is not None:
+            dataset.PixelSpacing = format_ds_sequence(spacing)
+
+        rows, cols = image_2d.shape
+        dataset.SamplesPerPixel = 1
+        dataset.PhotometricInterpretation = 'MONOCHROME2'
+        dataset.Rows = int(rows)
+        dataset.Columns = int(cols)
+        dataset.BitsAllocated = 16
+        dataset.BitsStored = 16
+        dataset.HighBit = 15
+        dataset.PixelRepresentation = 0
+        dataset.RescaleIntercept = format_ds(0.0)
+        dataset.RescaleSlope = format_ds(1.0)
+
+        image_min = int(image_2d.min()) if image_2d.size else 0
+        image_max = int(image_2d.max()) if image_2d.size else 0
+        window_width = max(1, image_max - image_min)
+        dataset.WindowCenter = int(image_min + window_width / 2)
+        dataset.WindowWidth = int(window_width)
+        dataset.PixelData = image_2d.tobytes()
+
+        safe_filename = os.path.basename(str(filename))
+        if not safe_filename:
+            return {'error': 'filename must not be empty'}
+        output_path = os.path.join(output_dir, safe_filename)
+        dataset.save_as(output_path, enforce_file_format=True)
+    except Exception as exc:  # pragma: no cover - Blender runtime feedback
+        return {'error': f"Error saving DRR DICOM file: {exc}"}
+
+    return {'success': f"Successfully exported DRR image to {output_dir}"}
+
+
+__all__ = [
+    "export_projection_to_dicom",
+    "export_voxel_grid_to_dicom",
+    "export_voxel_grid_to_dicom_iter",
+]

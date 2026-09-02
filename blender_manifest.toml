@@ -1,0 +1,37 @@
+schema_version = "1.0.0"
+id = "dental_dicomator"
+version = "1.0.7"
+name = "Dental DICOMator"
+tagline = "Create synthetic dental CT and DICOM teaching data"
+maintainer = "Mateus Bertolini & Michael Douglass"
+type = "add-on"
+website = "https://extensions.blender.org/add-ons/dental-dicomator/"
+blender_version_min = "5.1.0"
+license = ["SPDX:GPL-3.0-or-later"]
+# Tags must come from Blender's fixed add-on tag vocabulary; free-form tags
+# such as "Medical" fail `blender --command extension validate`.
+tags = ["3D View", "Import-Export", "Mesh"]
+copyright = ["2023-2026 Mateus Bertolini & Michael Douglass"]
+# The only bundled wheel (pydicom) is pure Python, so all desktop platforms work.
+platforms = ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"]
+wheels = [
+    "./wheels/pydicom-3.0.2-py3-none-any.whl"
+]
+
+# DICOMator writes only to a folder explicitly selected by the user.
+[permissions]
+files = "Write DICOM exports to user-selected folders"
+
+[build]
+paths_exclude_pattern = [
+    "__pycache__/",
+    "/.git/",
+    "/.github/",
+    "/.gitignore",
+    "/*.zip",
+    "/AGENTS.md",
+    "/download_wheels.py",
+    "/requirements-test.txt",
+    "/ruff.toml",
+    "/tests/",
+]
