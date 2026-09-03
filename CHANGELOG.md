@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.8] - 2026-09-03
+
+### Added
+
+- Reintroduced cortical/cancellous bone layering with a 2.0 mm cortical depth
+  and a 0.5 mm transition.
+- Added cortical depth and shell-blend controls for Bone objects.
+
+### Fixed
+
+- Cortical HU is now applied only inside the unchanged v1.0.7 closed-volume
+  occupancy mask. The layer no longer creates or modifies shell geometry and
+  therefore cannot remove occupied bone voxels.
+
 ## [1.0.7] - 2026-09-02
 
 - Titanium now has the highest overlap priority, remaining visible through bone or dental tissues.

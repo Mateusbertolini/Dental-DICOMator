@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: "Bertolini"
     given-names: "Mateus"
-version: "1.0.7"
-date-released: "2026-09-02"
+version: "1.0.8"
+date-released: "2026-09-03"
 license: "GPL-3.0-or-later"
 repository-code: "https://github.com/Mateusbertolini/Dental-DICOMator"
 url: "https://github.com/Mateusbertolini/Dental-DICOMator"

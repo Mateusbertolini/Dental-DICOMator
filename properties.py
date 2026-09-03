@@ -44,17 +44,17 @@ def apply_material_intensity(obj: bpy.types.Object, modality: str) -> None:
     # Dental presets select their layered behavior automatically. Other
     # presets preserve the original uniform-per-object voxelization.
     if material_key == "BONE":
-        # Use the proven uniform closed-volume path. Cortical layering remains
-        # registered for backward compatibility but is intentionally disabled.
-        obj.dicomator_dental_mode = "UNIFORM"
+        # Retain the proven closed-volume occupancy path and vary only the HU
+        # of voxels that it already classified as inside the bone.
+        obj.dicomator_dental_mode = "BONE"
         if float(getattr(obj, "dicomator_cortical_hu", 1100.0)) == 1100.0:
             obj.dicomator_cortical_hu = 800.0
         if float(getattr(obj, "dicomator_cancellous_hu", -100.0)) in {-100.0, 200.0}:
             obj.dicomator_cancellous_hu = 350.0
-        if float(getattr(obj, "dicomator_cortical_transition_mm", 0.05)) in {0.15, 0.3, 0.5}:
-            obj.dicomator_cortical_transition_mm = 0.05
-        if float(getattr(obj, "dicomator_cortical_thickness_mm", 0.2)) in {2.0, 10.0}:
-            obj.dicomator_cortical_thickness_mm = 0.2
+        if float(getattr(obj, "dicomator_cortical_transition_mm", 0.5)) in {0.05, 0.15, 0.3}:
+            obj.dicomator_cortical_transition_mm = 0.5
+        if float(getattr(obj, "dicomator_cortical_thickness_mm", 2.0)) in {0.2, 10.0}:
+            obj.dicomator_cortical_thickness_mm = 2.0
         if float(getattr(obj, "dicomator_trabecular_spacing_mm", 0.4)) == 4.0:
             obj.dicomator_trabecular_spacing_mm = 0.4
     elif material_key == "TOOTH":

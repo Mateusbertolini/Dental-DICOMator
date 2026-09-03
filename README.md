@@ -15,7 +15,7 @@ Douglass. The dental adaptation was developed by Mateus Bertolini.
 > treatment, and must not be used as patient-acquired data. Generated SOP
 > instances are marked `SyntheticData = YES`.
 
-## Version 1.0.7 highlights
+## Version 1.0.8 highlights
 
 - Titanium now has a fixed highest overlap tier, ensuring implants and metal
   restorations remain visible when they intersect bone or other dental meshes.
@@ -48,7 +48,7 @@ evaluation, `mathutils.bvhtree.BVHTree`, and NumPy.
 
 1. Open **Edit > Preferences > Extensions** in Blender.
 2. Open the Extensions menu and choose **Install from Disk...**.
-3. Select `Dental-DICOMator-1.0.7-Blender-Extension.zip`.
+3. Select `Dental-DICOMator-1.0.8-Blender-Extension.zip`.
 4. Enable **Dental DICOMator** if Blender does not enable it automatically.
 
 The extension can subsequently be removed from its Preferences entry using
@@ -76,11 +76,17 @@ deterministic overlap-priority mechanism remains active internally.
 
 ### Bone
 
-**Bone** uses the original stable, closed-volume voxel fill at **800 HU**.
-Cortical/cancellous shell generation is disabled because tested shell methods
-caused holes or an apparent loss of volume in complex mandibular meshes. Legacy
-cortical properties remain registered only for compatibility and do not affect
-dental exports.
+**Bone** retains the original stable, closed-volume occupancy mask. Within
+that already-filled volume, voxels close to the original mesh surface are
+assigned **800 HU** cortical behavior and deeper voxels are assigned **350 HU**
+cancellous behavior. The default cortical depth is **2.0 mm**, with a **0.5 mm**
+smooth transition. These two geometric controls are available in the sidebar;
+HU values remain managed by the extension.
+
+The cortical calculation changes voxel values only. It does not create a shell
+mesh, apply a modifier or Boolean operation, erode the volume, or replace the
+ray-pair fill. This design is intended to avoid the holes and lost bone volume
+seen with earlier experimental shell implementations.
 
 ### Tooth / Teeth
 
@@ -189,7 +195,7 @@ Older hidden artifact options are ignored by the dental export workflow.
 
 ## Scale, geometry, and STL limitations
 
-Dental DICOMator 1.0.7 uses metric Scene Unit Scale `0.001`, so one Blender
+Dental DICOMator 1.0.8 uses metric Scene Unit Scale `0.001`, so one Blender
 world unit represents one millimetre. Export configures this scale
 automatically. The fixed dental voxel spacing is 0.25 mm in X/Y and 0.5 mm in Z, which
 provides CBCT-like in-plane detail while producing two axial DICOM images per millimetre. `PixelSpacing`,
@@ -239,7 +245,7 @@ Validate and build from the repository root with Blender:
 
 ```bash
 blender --command extension validate
-blender --command extension build --output-filepath Dental-DICOMator-1.0.7-Blender-Extension.zip
+blender --command extension build --output-filepath Dental-DICOMator-1.0.8-Blender-Extension.zip
 ```
 
 Automated tests are in `tests/`. The bundled pydicom wheel can be refreshed

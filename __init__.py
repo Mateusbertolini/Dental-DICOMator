@@ -212,14 +212,14 @@ def register() -> None:  # pragma: no cover - Blender registration
         name="Dental Behavior", items=DENTAL_MATERIAL_MODE_ITEMS, default="UNIFORM"
     )
     bpy.types.Object.dicomator_cortical_thickness_mm = FloatProperty(
-        name="Cortical Depth (mm)", default=0.2, min=0.0, soft_max=1.0, precision=2
+        name="Cortical Depth (mm)", default=2.0, min=0.0, soft_max=5.0, precision=2
     )
     bpy.types.Object.dicomator_cortical_group = StringProperty(
         name="Cortical Vertex Group", default="Cortical",
         description="Automatically contains all bone surface vertices",
     )
     bpy.types.Object.dicomator_cortical_transition_mm = FloatProperty(
-        name="Shell Blend (mm)", default=0.05, min=0.0, soft_max=0.2, precision=2
+        name="Shell Blend (mm)", default=0.5, min=0.0, soft_max=2.0, precision=2
     )
     bpy.types.Object.dicomator_cortical_hu = FloatProperty(
         name="Cortical HU", default=800.0, min=MIN_HU_VALUE, max=MAX_HU_VALUE

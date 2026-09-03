@@ -52,7 +52,9 @@ def _effective_dental_mode(obj: Object) -> str:
 
     material = str(getattr(obj, "dicomator_material", "CUSTOM"))
     if material == "BONE":
-        return "UNIFORM"
+        # Layer HU values inside the original closed-volume fill. This must not
+        # participate in ray pairing or inside/outside classification.
+        return "BONE"
     if material == "TOOTH":
         return "TOOTH"
     if material == "DENTAL_PULP":
@@ -209,19 +211,14 @@ def _dental_point_values(
 
     if mode == "BONE":
         z_mm = np.asarray(z_centres, dtype=np.float64)
-        requested_thickness = float(
-            getattr(obj, "dicomator_cortical_thickness_mm", 0.2)
+        requested_thickness = max(
+            0.0, float(getattr(obj, "dicomator_cortical_thickness_mm", 2.0))
         )
-        # A fixed shell can consume thin alveolar meshes completely. Preserve
-        # a cancellous centre whenever the ray contains enough sampled voxels.
-        finite_depths = depths_mm[np.isfinite(depths_mm)]
-        if len(finite_depths) >= 3:
-            requested_thickness = min(
-                requested_thickness, float(np.max(finite_depths)) * 0.60
-            )
-        # This changes values only for the already-filled segment supplied by
-        # the original ray-pair voxelizer. No shell geometry or boolean mask
-        # participates in inside/outside classification.
+        # Values are computed only for the already-filled segment supplied by
+        # the original v1.0.7 ray-pair voxelizer. No shell mesh, modifier,
+        # boolean, erosion, or secondary occupancy mask participates in
+        # inside/outside classification; cortical layering therefore cannot
+        # open holes or remove filled bone voxels.
         return textured_bone_values(
             depths_mm,
             np.full(len(z_centres), x_world),
