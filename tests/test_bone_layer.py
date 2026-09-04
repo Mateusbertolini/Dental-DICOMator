@@ -50,3 +50,31 @@ def test_textured_path_preserves_filled_value_count():
     )
     assert values.shape == depth.shape
     assert np.count_nonzero(values > -1000) == depth.size
+
+
+def test_unpainted_surface_remains_cancellous():
+    values = dental.painted_bone_values(
+        np.array([0.0, 0.5, 1.5]), np.array([0.0, 0.0, 0.0]),
+        2.0, 0.5, 0.05, 0.2, 800.0, 350.0, 0.0,
+    )
+    np.testing.assert_array_equal(values, np.array([350, 350, 350], dtype=np.int16))
+
+
+def test_painted_surface_propagates_cortical_inward():
+    values = dental.painted_bone_values(
+        np.array([0.0, 1.0, 2.0, 3.0]), np.ones(4),
+        2.0, 0.5, 0.05, 0.2, 800.0, 350.0, 0.0,
+    )
+    assert values[0] == 800 and values[1] == 800
+    assert 350 < values[2] < 800
+    assert values[3] == 350
+
+
+def test_partial_weight_blends_cortical_and_cancellous():
+    values = dental.painted_bone_values(
+        np.zeros(3), np.array([0.0, 0.05, 1.0]),
+        2.0, 0.0, 0.05, 0.2, 800.0, 350.0, 0.0,
+    )
+    assert values[0] == 350
+    assert 350 < values[1] < 800
+    assert values[2] == 800

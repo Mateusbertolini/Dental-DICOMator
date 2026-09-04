@@ -29,12 +29,13 @@ from .constants import (
 )
 from .dental import (
     depth_fraction,
+    painted_bone_values,
     sampled_layer_fraction,
     smooth_threshold,
     textured_bone_values,
     tooth_values_from_surface,
 )
-from .properties import ensure_tooth_vertex_groups
+from .properties import ensure_bone_vertex_group, ensure_tooth_vertex_groups
 
 VectorLike = Sequence[float]
 VoxelSize = Sequence[float]
@@ -140,9 +141,11 @@ def _face_dental_weights(obj: Object) -> dict[str, object]:
 
     mode = _effective_dental_mode(obj)
     if mode == "BONE":
-        # Bone uses the complete closed surface; it does not depend on a
-        # painted/evaluated mesh whose topology can differ after modifiers.
-        return {"cortical": None}
+        cortical_name = str(getattr(obj, "dicomator_cortical_group", "Cortical"))
+        return {
+            "cortical": _painted_surface(obj, cortical_name)
+            if bool(getattr(obj, "dicomator_enable_cortical", True)) else None
+        }
     if mode == "PULP":
         gutta_name = str(getattr(obj, "dicomator_gutta_group", "GuttaPercha"))
         return {
@@ -210,26 +213,30 @@ def _dental_point_values(
         return np.clip(np.rint(values), MIN_HU_VALUE, MAX_HU_VALUE).astype(np.int16)
 
     if mode == "BONE":
-        z_mm = np.asarray(z_centres, dtype=np.float64)
-        requested_thickness = max(
-            0.0, float(getattr(obj, "dicomator_cortical_thickness_mm", 2.0))
-        )
-        # Values are computed only for the already-filled segment supplied by
-        # the original v1.0.7 ray-pair voxelizer. No shell mesh, modifier,
-        # boolean, erosion, or secondary occupancy mask participates in
-        # inside/outside classification; cortical layering therefore cannot
-        # open holes or remove filled bone voxels.
-        return textured_bone_values(
-            depths_mm,
-            np.full(len(z_centres), x_world),
-            np.full(len(z_centres), y_world),
-            z_mm,
-            requested_thickness,
-            getattr(obj, "dicomator_cortical_transition_mm", 0.05),
+        cortical_surface = face_weights.get("cortical")
+        cortical_depths = np.full(len(z_centres), float("inf"), dtype=np.float64)
+        cortical_weights = np.zeros(len(z_centres), dtype=np.float64)
+        if cortical_surface is not None:
+            cortical_bvh, cortical_face_weights = cortical_surface
+            for index, z_world in enumerate(z_centres):
+                location, _normal, face_index, distance = cortical_bvh.find_nearest(
+                    Vector((x_world, y_world, float(z_world)))
+                )
+                if location is not None and face_index is not None and distance is not None:
+                    cortical_depths[index] = float(distance)
+                    cortical_weights[index] = cortical_face_weights.get(int(face_index), 0.0)
+        # Values change only inside the unchanged ray-pair occupancy segment.
+        # Missing, disabled, or empty paint safely produces cancellous bone.
+        return painted_bone_values(
+            cortical_depths,
+            cortical_weights,
+            getattr(obj, "dicomator_cortical_thickness_mm", 2.0),
+            getattr(obj, "dicomator_cortical_transition_mm", 0.5),
+            0.05,
+            getattr(obj, "dicomator_cortical_blend_width", 0.2),
             getattr(obj, "dicomator_cortical_hu", 800.0),
             getattr(obj, "dicomator_cancellous_hu", 350.0),
-            getattr(obj, "dicomator_trabecular_spacing_mm", 0.4),
-            getattr(obj, "dicomator_trabecular_contrast_hu", 0.0),
+            voxel_radius_mm,
         )
     if mode == "PULP":
         gutta_surface = face_weights.get("gutta")
@@ -555,6 +562,7 @@ def _voxelize_objects_iter(
         # Final export-time safeguard for files loaded before this version or
         # objects whose material was assigned through a script without a UI
         # update callback.
+        ensure_bone_vertex_group(obj)
         ensure_tooth_vertex_groups(obj)
         if (
             _effective_dental_mode(obj) == "PULP"
@@ -584,6 +592,15 @@ def _voxelize_objects_iter(
             _skip(f"Skipped '{obj.name}' during {label} voxelization: outside the voxel grid")
             continue
         face_weights = _face_dental_weights(obj)
+        if (
+            _effective_dental_mode(obj) == "BONE"
+            and bool(getattr(obj, "dicomator_enable_cortical", True))
+            and not face_weights["cortical"]
+        ):
+            _skip(
+                f"'{obj.name}' has no usable Cortical vertex-group weights; "
+                "the bone will voxelize as cancellous"
+            )
         if (
             _effective_dental_mode(obj) == "TOOTH"
             and bool(getattr(obj, "dicomator_enable_enamel", True))

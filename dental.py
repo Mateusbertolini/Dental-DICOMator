@@ -63,6 +63,32 @@ def layered_bone_values_from_depth(
     return np.clip(np.rint(values), MIN_HU_VALUE, MAX_HU_VALUE).astype(np.int16)
 
 
+def painted_bone_values(
+    surface_depth_mm,
+    surface_weight,
+    cortical_thickness_mm: float,
+    depth_transition_mm: float,
+    weight_threshold: float,
+    weight_blend_width: float,
+    cortical_hu: float,
+    cancellous_hu: float,
+    voxel_radius_mm: float = 0.0,
+):
+    """Return cortical HU only beneath weight-painted bone surfaces."""
+
+    raw_weight = np.asarray(surface_weight, dtype=np.float64)
+    paint = smooth_threshold(raw_weight, weight_threshold, weight_blend_width)
+    # A zero vertex weight means explicitly unpainted. Keep it at exactly zero
+    # even when the smoothing interval extends below the threshold.
+    paint = np.where(raw_weight > 0.0, paint, 0.0)
+    shell = sampled_layer_fraction(
+        surface_depth_mm, cortical_thickness_mm, depth_transition_mm, voxel_radius_mm,
+    )
+    fraction = np.asarray(paint, dtype=np.float64) * np.asarray(shell, dtype=np.float64)
+    values = float(cancellous_hu) + fraction * (float(cortical_hu) - float(cancellous_hu))
+    return np.clip(np.rint(values), MIN_HU_VALUE, MAX_HU_VALUE).astype(np.int16)
+
+
 def textured_bone_values(
     depth_mm,
     x_mm,
@@ -274,6 +300,7 @@ __all__ = [
     "depth_fraction",
     "layered_bone_values",
     "layered_bone_values_from_depth",
+    "painted_bone_values",
     "textured_bone_values",
     "smooth_threshold",
     "sampled_layer_fraction",

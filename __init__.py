@@ -102,6 +102,22 @@ classes = (
 )
 
 
+def _update_cortical_vertex_group(obj, _context) -> None:
+    """Create/remove and activate the managed Cortical paint group."""
+
+    if getattr(obj, "type", None) != 'MESH':
+        return
+    group_name = "Cortical"
+    obj.dicomator_cortical_group = group_name
+    group = obj.vertex_groups.get(group_name)
+    if obj.dicomator_enable_cortical:
+        if group is None:
+            group = obj.vertex_groups.new(name=group_name)
+        obj.vertex_groups.active_index = group.index
+    elif group is not None:
+        obj.vertex_groups.remove(group)
+
+
 def _update_enamel_vertex_group(obj, _context) -> None:
     """Create/remove and activate the managed Enamel paint group."""
 
@@ -216,7 +232,16 @@ def register() -> None:  # pragma: no cover - Blender registration
     )
     bpy.types.Object.dicomator_cortical_group = StringProperty(
         name="Cortical Vertex Group", default="Cortical",
-        description="Automatically contains all bone surface vertices",
+        description="Managed group painted on surfaces that should receive cortical behavior",
+    )
+    bpy.types.Object.dicomator_enable_cortical = bpy.props.BoolProperty(
+        name="Paint Cortical Bone", default=True,
+        description="Apply cortical behavior only beneath painted Cortical surfaces",
+        update=_update_cortical_vertex_group,
+    )
+    bpy.types.Object.dicomator_cortical_blend_width = FloatProperty(
+        name="Weight Blend", default=0.2, min=0.0, max=1.0, precision=2,
+        description="Smooth the boundary between painted cortical and cancellous regions",
     )
     bpy.types.Object.dicomator_cortical_transition_mm = FloatProperty(
         name="Shell Blend (mm)", default=0.5, min=0.0, soft_max=2.0, precision=2
@@ -410,7 +435,9 @@ def unregister() -> None:  # pragma: no cover - Blender registration
         "dicomator_enamel_group", "dicomator_enable_enamel",
         "dicomator_cancellous_hu", "dicomator_cortical_hu",
         "dicomator_trabecular_contrast_hu", "dicomator_trabecular_spacing_mm",
-        "dicomator_cortical_group", "dicomator_cortical_transition_mm", "dicomator_cortical_thickness_mm",
+        "dicomator_cortical_group", "dicomator_enable_cortical",
+        "dicomator_cortical_blend_width", "dicomator_cortical_transition_mm",
+        "dicomator_cortical_thickness_mm",
         "dicomator_dental_mode",
     ):
         if hasattr(bpy.types.Object, attr):

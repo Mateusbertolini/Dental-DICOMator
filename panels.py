@@ -316,9 +316,13 @@ class VIEW3D_PT_dicomator_per_object_hu(Panel):
                 material_key = getattr(obj, "dicomator_material", "CUSTOM")
                 dental_mode = getattr(obj, "dicomator_dental_mode", "UNIFORM")
                 if dental_mode == "BONE" or material_key == "BONE":
-                    bone = col.column(align=True)
-                    bone.prop(obj, "dicomator_cortical_thickness_mm")
-                    bone.prop(obj, "dicomator_cortical_transition_mm")
+                    col.prop(obj, "dicomator_enable_cortical")
+                    if getattr(obj, "dicomator_enable_cortical", True):
+                        bone = col.column(align=True)
+                        _paint_mode_buttons(bone, "Cortical")
+                        bone.prop(obj, "dicomator_cortical_blend_width")
+                        bone.prop(obj, "dicomator_cortical_thickness_mm")
+                        bone.prop(obj, "dicomator_cortical_transition_mm", text="Depth Transition (mm)")
                 elif dental_mode == "TOOTH" or material_key == "TOOTH":
                     col.prop(obj, "dicomator_enable_enamel")
                     if getattr(obj, "dicomator_enable_enamel", True):

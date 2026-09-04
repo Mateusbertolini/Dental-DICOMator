@@ -12,6 +12,23 @@ from .constants import (
 )
 
 
+def ensure_bone_vertex_group(obj: bpy.types.Object) -> None:
+    """Ensure the managed Cortical group exists when painted bone is enabled."""
+
+    if getattr(obj, "type", None) != 'MESH':
+        return
+    material_key = str(getattr(obj, "dicomator_material", "CUSTOM"))
+    dental_mode = str(getattr(obj, "dicomator_dental_mode", "UNIFORM"))
+    if material_key != "BONE" and dental_mode != "BONE":
+        return
+    obj.dicomator_cortical_group = "Cortical"
+    if bool(getattr(obj, "dicomator_enable_cortical", True)):
+        group = obj.vertex_groups.get("Cortical")
+        if group is None:
+            group = obj.vertex_groups.new(name="Cortical")
+        obj.vertex_groups.active_index = group.index
+
+
 def ensure_tooth_vertex_groups(obj: bpy.types.Object) -> None:
     """Ensure mandatory tooth paint groups exist, including in older files."""
 
@@ -57,6 +74,7 @@ def apply_material_intensity(obj: bpy.types.Object, modality: str) -> None:
             obj.dicomator_cortical_thickness_mm = 2.0
         if float(getattr(obj, "dicomator_trabecular_spacing_mm", 0.4)) == 4.0:
             obj.dicomator_trabecular_spacing_mm = 0.4
+        ensure_bone_vertex_group(obj)
     elif material_key == "TOOTH":
         obj.dicomator_dental_mode = "TOOTH"
         if float(getattr(obj, "dicomator_enamel_hu", 2500.0)) == 2500.0:
@@ -586,6 +604,7 @@ class DICOMATOR_PG_properties(bpy.types.PropertyGroup):
 __all__ = [
     "DICOMATOR_PG_properties",
     "apply_material_intensity",
+    "ensure_bone_vertex_group",
     "ensure_tooth_vertex_groups",
     "update_imaging_modality",
     "update_object_material",

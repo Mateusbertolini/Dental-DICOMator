@@ -4,9 +4,11 @@
 
 ### Added
 
-- Reintroduced cortical/cancellous bone layering with a 2.0 mm cortical depth
-  and a 0.5 mm transition.
-- Added cortical depth and shell-blend controls for Bone objects.
+- Added a managed Cortical vertex group and Paint Cortical Bone workflow.
+- Painted bone surfaces generate an 800-HU cortical layer with 2.0 mm depth;
+  unpainted surfaces and the interior remain cancellous at 350 HU.
+- Added Cortical Weight Paint/Object Mode controls, Weight Blend, depth, and
+  depth-transition inputs for Bone objects.
 
 ### Fixed
 

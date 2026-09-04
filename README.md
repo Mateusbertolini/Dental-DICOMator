@@ -76,17 +76,22 @@ deterministic overlap-priority mechanism remains active internally.
 
 ### Bone
 
-**Bone** retains the original stable, closed-volume occupancy mask. Within
-that already-filled volume, voxels close to the original mesh surface are
-assigned **800 HU** cortical behavior and deeper voxels are assigned **350 HU**
-cancellous behavior. The default cortical depth is **2.0 mm**, with a **0.5 mm**
-smooth transition. These two geometric controls are available in the sidebar;
-HU values remain managed by the extension.
+**Bone** retains the original stable, closed-volume occupancy mask and uses
+**350 HU** cancellous behavior by default. Enabling **Paint Cortical Bone**
+automatically creates a managed Cortical vertex group. Only painted surface
+regions generate the **800 HU** cortical layer; unpainted surfaces and the
+remaining interior stay cancellous. Cortical depth defaults to **2.0 mm**,
+Depth Transition to **0.5 mm**, and Weight Blend to **0.2**.
 
-The cortical calculation changes voxel values only. It does not create a shell
-mesh, apply a modifier or Boolean operation, erode the volume, or replace the
-ray-pair fill. This design is intended to avoid the holes and lost bone volume
-seen with earlier experimental shell implementations.
+The sidebar provides aligned **Weight Paint** and **Object Mode** buttons. If
+cortical painting is disabled, the managed group is removed or disregarded and
+the bone is uniformly cancellous. If enabled without usable weights, export
+warns the user and safely falls back to cancellous bone.
+
+The cortical calculation changes voxel values only. It does not create shell
+geometry, apply a modifier or Boolean operation, erode the volume, or replace
+the ray-pair fill. Internal mesh structures receive cortical behavior only when
+their corresponding surface vertices are intentionally painted.
 
 ### Tooth / Teeth
 
