@@ -33,6 +33,7 @@ from .dental import (
     sampled_layer_fraction,
     smooth_threshold,
     textured_bone_values,
+    synthetic_bone_values,
     tooth_values_from_surface,
 )
 from .properties import ensure_bone_vertex_group, ensure_tooth_vertex_groups
@@ -113,6 +114,39 @@ def _painted_surface(obj: Object, group_name: str, *, use_max_weight: bool = Fal
     return BVHTree.FromPolygons(vertices.tolist(), polygons), weights
 
 
+def _weighted_surface(obj: Object, group_name: str):
+    """Return the complete surface plus per-face weights, including zeroes.
+
+    Unlike ``_painted_surface``, this keeps unpainted faces in the nearest-face
+    competition. A local painted density region therefore does not leak across
+    the entire medullary volume merely because it is the nearest painted face.
+    """
+
+    mesh = obj.data
+    group = obj.vertex_groups.get(group_name) if group_name else None
+    if mesh is None or group is None:
+        return None
+    vertices = np.array([obj.matrix_world @ vertex.co for vertex in mesh.vertices])
+    polygons = []
+    weights: dict[int, float] = {}
+    any_painted = False
+    for polygon in mesh.polygons:
+        values = []
+        for vertex_index in polygon.vertices:
+            vertex = mesh.vertices[vertex_index]
+            values.append(next(
+                (float(item.weight) for item in vertex.groups if item.group == group.index),
+                0.0,
+            ))
+        weight = sum(values) / max(1, len(values))
+        weights[len(polygons)] = weight
+        any_painted = any_painted or weight > 0.0
+        polygons.append([int(index) for index in polygon.vertices])
+    if not polygons or not any_painted:
+        return None
+    return BVHTree.FromPolygons(vertices.tolist(), polygons), weights
+
+
 def _unpainted_surface(obj: Object, group_name: str, threshold: float):
     """Build a BVH from faces not assigned to the named paint group."""
 
@@ -144,7 +178,10 @@ def _face_dental_weights(obj: Object) -> dict[str, object]:
         cortical_name = str(getattr(obj, "dicomator_cortical_group", "Cortical"))
         return {
             "cortical": _painted_surface(obj, cortical_name)
-            if bool(getattr(obj, "dicomator_enable_cortical", True)) else None
+            if bool(getattr(obj, "dicomator_enable_cortical", True)) else None,
+            "density": _weighted_surface(
+                obj, str(getattr(obj, "dicomator_bone_density_group", "BoneDensity"))
+            ) if bool(getattr(obj, "dicomator_enable_bone_density_paint", False)) else None,
         }
     if mode == "PULP":
         gutta_name = str(getattr(obj, "dicomator_gutta_group", "GuttaPercha"))
@@ -225,18 +262,36 @@ def _dental_point_values(
                 if location is not None and face_index is not None and distance is not None:
                     cortical_depths[index] = float(distance)
                     cortical_weights[index] = cortical_face_weights.get(int(face_index), 0.0)
+        density_weights = np.zeros(len(z_centres), dtype=np.float64)
+        density_surface = face_weights.get("density")
+        if density_surface is not None:
+            density_bvh, density_face_weights = density_surface
+            for index, z_world in enumerate(z_centres):
+                location, _normal, face_index, _distance = density_bvh.find_nearest(
+                    Vector((x_world, y_world, float(z_world)))
+                )
+                if location is not None and face_index is not None:
+                    density_weights[index] = density_face_weights.get(int(face_index), 0.0)
         # Values change only inside the unchanged ray-pair occupancy segment.
-        # Missing, disabled, or empty paint safely produces cancellous bone.
-        return painted_bone_values(
+        # Trabeculae and density paint therefore cannot create holes or expand
+        # the object beyond the original closed-volume mask.
+        return synthetic_bone_values(
             cortical_depths,
             cortical_weights,
-            getattr(obj, "dicomator_cortical_thickness_mm", 2.0),
-            getattr(obj, "dicomator_cortical_transition_mm", 0.5),
-            0.05,
-            getattr(obj, "dicomator_cortical_blend_width", 0.2),
-            getattr(obj, "dicomator_cortical_hu", 800.0),
-            getattr(obj, "dicomator_cancellous_hu", 350.0),
-            voxel_radius_mm,
+            np.full(len(z_centres), x_world, dtype=np.float64),
+            np.full(len(z_centres), y_world, dtype=np.float64),
+            z_centres,
+            density_weights,
+            base_density=getattr(obj, "dicomator_bone_density_base", "D2"),
+            target_density=getattr(obj, "dicomator_bone_density_target", "D1"),
+            cortical_thickness_mm=getattr(obj, "dicomator_cortical_thickness_mm", 2.0),
+            cortical_transition_mm=getattr(obj, "dicomator_cortical_transition_mm", 0.5),
+            cortical_weight_blend=getattr(obj, "dicomator_cortical_blend_width", 0.2),
+            cortical_hu=getattr(obj, "dicomator_cortical_hu", 800.0),
+            pattern_enabled=getattr(obj, "dicomator_enable_trabecular_pattern", True),
+            pattern_scale_mm=getattr(obj, "dicomator_trabecular_spacing_mm", 25.0),
+            pattern_strength=getattr(obj, "dicomator_trabecular_contrast_hu", 1.0),
+            voxel_radius_mm=voxel_radius_mm,
         )
     if mode == "PULP":
         gutta_surface = face_weights.get("gutta")
@@ -600,6 +655,15 @@ def _voxelize_objects_iter(
             _skip(
                 f"'{obj.name}' has no usable Cortical vertex-group weights; "
                 "the bone will voxelize as cancellous"
+            )
+        if (
+            _effective_dental_mode(obj) == "BONE"
+            and bool(getattr(obj, "dicomator_enable_bone_density_paint", False))
+            and not face_weights["density"]
+        ):
+            _skip(
+                f"'{obj.name}' has density painting enabled but no usable "
+                "BoneDensity weights; the base D1-D4 density will be used"
             )
         if (
             _effective_dental_mode(obj) == "TOOTH"

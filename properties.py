@@ -27,6 +27,11 @@ def ensure_bone_vertex_group(obj: bpy.types.Object) -> None:
         if group is None:
             group = obj.vertex_groups.new(name="Cortical")
         obj.vertex_groups.active_index = group.index
+    obj.dicomator_bone_density_group = "BoneDensity"
+    if bool(getattr(obj, "dicomator_enable_bone_density_paint", False)):
+        group = obj.vertex_groups.get("BoneDensity")
+        if group is None:
+            obj.vertex_groups.new(name="BoneDensity")
 
 
 def ensure_tooth_vertex_groups(obj: bpy.types.Object) -> None:
@@ -72,8 +77,8 @@ def apply_material_intensity(obj: bpy.types.Object, modality: str) -> None:
             obj.dicomator_cortical_transition_mm = 0.5
         if float(getattr(obj, "dicomator_cortical_thickness_mm", 2.0)) in {0.2, 10.0}:
             obj.dicomator_cortical_thickness_mm = 2.0
-        if float(getattr(obj, "dicomator_trabecular_spacing_mm", 0.4)) == 4.0:
-            obj.dicomator_trabecular_spacing_mm = 0.4
+        if float(getattr(obj, "dicomator_trabecular_spacing_mm", 25.0)) in {0.4, 1.25, 4.0}:
+            obj.dicomator_trabecular_spacing_mm = 25.0
         ensure_bone_vertex_group(obj)
     elif material_key == "TOOTH":
         obj.dicomator_dental_mode = "TOOTH"

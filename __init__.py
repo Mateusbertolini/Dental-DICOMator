@@ -118,6 +118,22 @@ def _update_cortical_vertex_group(obj, _context) -> None:
         obj.vertex_groups.remove(group)
 
 
+def _update_bone_density_vertex_group(obj, _context) -> None:
+    """Create/remove and activate the managed BoneDensity paint group."""
+
+    if getattr(obj, "type", None) != 'MESH':
+        return
+    group_name = "BoneDensity"
+    obj.dicomator_bone_density_group = group_name
+    group = obj.vertex_groups.get(group_name)
+    if obj.dicomator_enable_bone_density_paint:
+        if group is None:
+            group = obj.vertex_groups.new(name=group_name)
+        obj.vertex_groups.active_index = group.index
+    elif group is not None:
+        obj.vertex_groups.remove(group)
+
+
 def _update_enamel_vertex_group(obj, _context) -> None:
     """Create/remove and activate the managed Enamel paint group."""
 
@@ -252,13 +268,40 @@ def register() -> None:  # pragma: no cover - Blender registration
     bpy.types.Object.dicomator_cancellous_hu = FloatProperty(
         name="Cancellous HU", default=350.0, min=MIN_HU_VALUE, max=MAX_HU_VALUE
     )
+    bone_density_items = (
+        ("D1", "D1 - Very dense", "Dense synthetic cancellous pattern"),
+        ("D2", "D2 - Dense", "Default moderately dense synthetic cancellous pattern"),
+        ("D3", "D3 - Porous", "Lower-density synthetic cancellous pattern"),
+        ("D4", "D4 - Very porous", "Lowest-density synthetic cancellous pattern"),
+    )
+    bpy.types.Object.dicomator_bone_density_base = EnumProperty(
+        name="Base Bone Density", items=bone_density_items, default="D2",
+        description="Synthetic educational density preset applied to the unpainted bone volume",
+    )
+    bpy.types.Object.dicomator_enable_bone_density_paint = bpy.props.BoolProperty(
+        name="Paint Bone Density", default=False,
+        description="Blend painted regions from the base density toward a target D1-D4 density",
+        update=_update_bone_density_vertex_group,
+    )
+    bpy.types.Object.dicomator_bone_density_target = EnumProperty(
+        name="Painted Density", items=bone_density_items, default="D1",
+        description="Density reached at weight 1.0; intermediate weights create a smooth transition",
+    )
+    bpy.types.Object.dicomator_bone_density_group = StringProperty(
+        name="Bone Density Vertex Group", default="BoneDensity",
+        description="Managed group used for local D1-D4 density variation",
+    )
+    bpy.types.Object.dicomator_enable_trabecular_pattern = bpy.props.BoolProperty(
+        name="Trabecular Pattern", default=True,
+        description="Create deterministic bright trabeculae and darker marrow spaces without changing bone occupancy",
+    )
     bpy.types.Object.dicomator_trabecular_spacing_mm = FloatProperty(
-        name="Trabecular Spacing (mm)", default=0.4, min=0.025, soft_max=1.0, precision=3,
-        description="Approximate spacing of the synthetic cancellous bone struts",
+        name="Noise Scale", default=25.0, min=1.0, max=100.0, soft_max=50.0, precision=1,
+        description="Scale of the deterministic 3D noise texture used for cancellous bone",
     )
     bpy.types.Object.dicomator_trabecular_contrast_hu = FloatProperty(
-        name="Trabecular Contrast (HU)", default=0.0, min=0.0, soft_max=1500.0,
-        description="HU separation between marrow-like spaces and trabecular struts",
+        name="Pattern Strength", default=1.0, min=0.0, max=1.0, precision=2,
+        description="Contrast between bright trabeculae and darker marrow-like spaces",
     )
     bpy.types.Object.dicomator_enamel_group = StringProperty(
         name="Enamel Vertex Group", default="Enamel",
@@ -434,6 +477,9 @@ def unregister() -> None:  # pragma: no cover - Blender registration
         "dicomator_dentin_hu", "dicomator_enamel_hu",
         "dicomator_enamel_group", "dicomator_enable_enamel",
         "dicomator_cancellous_hu", "dicomator_cortical_hu",
+        "dicomator_bone_density_group", "dicomator_bone_density_target",
+        "dicomator_enable_bone_density_paint", "dicomator_bone_density_base",
+        "dicomator_enable_trabecular_pattern",
         "dicomator_trabecular_contrast_hu", "dicomator_trabecular_spacing_mm",
         "dicomator_cortical_group", "dicomator_enable_cortical",
         "dicomator_cortical_blend_width", "dicomator_cortical_transition_mm",

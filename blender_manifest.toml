@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "dental_dicomator"
-version = "1.0.8"
+version = "1.0.10"
 name = "Dental DICOMator"
 tagline = "Create synthetic dental CT and DICOM teaching data"
 maintainer = "Mateus Bertolini & Michael Douglass"

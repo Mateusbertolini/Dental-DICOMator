@@ -15,10 +15,15 @@ Douglass. The dental adaptation was developed by Mateus Bertolini.
 > treatment, and must not be used as patient-acquired data. Generated SOP
 > instances are marked `SyntheticData = YES`.
 
-## Version 1.0.8 highlights
+## Version 1.0.10 highlights
 
 - Titanium now has a fixed highest overlap tier, ensuring implants and metal
   restorations remain visible when they intersect bone or other dental meshes.
+- Bone objects now support D1-D4 synthetic density presets, local density
+  weight painting, and a deterministic trabecular pattern that preserves the
+  original closed-volume occupancy mask.
+- The cancellous pattern uses smooth deterministic 3D fBM noise at a default
+  Noise Scale of 25 rather than periodic ridges, avoiding a grid appearance.
 
 CBCT voxel spacing is set to **0.25 x 0.25 x 0.5 mm**. For a field around 132 x 103 x 92 mm, this produces roughly 530 x 414 pixels per image and approximately 186 axial slices, plus the export margin. Each uncompressed 16-bit DICOM slice remains approximately 440 KB.
 
@@ -29,7 +34,8 @@ Dental layer depths are now expressed as physical millimetres after the scene-sc
 - Dental-only CT workflow with a simplified, numbered sidebar.
 - Managed weight-paint workflows for enamel, PDL, caries, restoration, and
   gutta-percha.
-- Stable, closed-volume bone voxelization at a fixed educational HU value.
+- Stable, closed-volume bone voxelization with synthetic D1-D4 density and
+  trabecular attenuation profiles.
 - Fixed dental material presets and automatic layer precedence.
 - Optional Gaussian, quantum, motion, and titanium-only metal artifacts.
 - DICOM export, metadata, progress, cancellation, validation, and safe staging
@@ -48,7 +54,7 @@ evaluation, `mathutils.bvhtree.BVHTree`, and NumPy.
 
 1. Open **Edit > Preferences > Extensions** in Blender.
 2. Open the Extensions menu and choose **Install from Disk...**.
-3. Select `Dental-DICOMator-1.0.8-Blender-Extension.zip`.
+3. Select `Dental-DICOMator-1.0.10-Blender-Extension.zip`.
 4. Enable **Dental DICOMator** if Blender does not enable it automatically.
 
 The extension can subsequently be removed from its Preferences entry using
@@ -76,19 +82,42 @@ deterministic overlap-priority mechanism remains active internally.
 
 ### Bone
 
-**Bone** retains the original stable, closed-volume occupancy mask and uses
-**350 HU** cancellous behavior by default. Enabling **Paint Cortical Bone**
+**Bone** retains the original stable, closed-volume occupancy mask. Choose an
+object-wide **Base Bone Density** from D1 (densest) through D4 (most porous).
+D2 preserves the previous 350-HU average as the default. These are synthetic
+educational profiles, not scanner-independent clinical HU classifications.
+
+Enable **Paint Bone Density** to create the managed `BoneDensity` group and
+select a **Painted Density** target. Weight 0 retains the base density, weight
+1 reaches the target, and intermediate weights produce a smooth transition.
+Because the complete surface participates in nearest-region assignment,
+painted density does not leak across unrelated unpainted surfaces.
+
+The **Trabecular Pattern** option replaces a flat cancellous value with a
+deterministic three-dimensional fBM noise field resembling the Blender Noise
+Texture. **Noise Scale** defaults to **25** and **Pattern Strength** controls
+contrast. The internal equivalent uses Detail 2 and Roughness 0.5. D1 creates
+more numerous and brighter trabeculae, while D4 creates fewer and less
+radiopaque trabeculae with more marrow-like space. The marrow baseline itself
+remains constant across D1-D4, so painted density does not appear as a uniform
+dark overlay. Identical geometry and settings produce the same pattern on
+repeated exports.
+
+Enabling **Paint Cortical Bone**
 automatically creates a managed Cortical vertex group. Only painted surface
 regions generate the **800 HU** cortical layer; unpainted surfaces and the
-remaining interior stay cancellous. Cortical depth defaults to **2.0 mm**,
+remaining interior use the selected density and trabecular behavior. Cortical
+depth defaults to **2.0 mm**,
 Depth Transition to **0.5 mm**, and Weight Blend to **0.2**.
 
 The sidebar provides aligned **Weight Paint** and **Object Mode** buttons. If
 cortical painting is disabled, the managed group is removed or disregarded and
-the bone is uniformly cancellous. If enabled without usable weights, export
-warns the user and safely falls back to cancellous bone.
+the bone uses only its selected cancellous density and trabecular behavior. If
+enabled without usable weights, export warns the user and safely omits the
+cortical layer.
 
-The cortical calculation changes voxel values only. It does not create shell
+All bone-density, trabecular, and cortical calculations change voxel values
+only. They do not create shell
 geometry, apply a modifier or Boolean operation, erode the volume, or replace
 the ray-pair fill. Internal mesh structures receive cortical behavior only when
 their corresponding surface vertices are intentionally painted.
@@ -200,7 +229,7 @@ Older hidden artifact options are ignored by the dental export workflow.
 
 ## Scale, geometry, and STL limitations
 
-Dental DICOMator 1.0.8 uses metric Scene Unit Scale `0.001`, so one Blender
+Dental DICOMator 1.0.10 uses metric Scene Unit Scale `0.001`, so one Blender
 world unit represents one millimetre. Export configures this scale
 automatically. The fixed dental voxel spacing is 0.25 mm in X/Y and 0.5 mm in Z, which
 provides CBCT-like in-plane detail while producing two axial DICOM images per millimetre. `PixelSpacing`,
@@ -250,7 +279,7 @@ Validate and build from the repository root with Blender:
 
 ```bash
 blender --command extension validate
-blender --command extension build --output-filepath Dental-DICOMator-1.0.8-Blender-Extension.zip
+blender --command extension build --output-filepath Dental-DICOMator-1.0.10-Blender-Extension.zip
 ```
 
 Automated tests are in `tests/`. The bundled pydicom wheel can be refreshed

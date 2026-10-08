@@ -6,6 +6,14 @@ import numpy as np
 from .constants import MAX_HU_VALUE, MIN_HU_VALUE
 
 
+BONE_DENSITY_FRACTIONS = {
+    "D1": 1.0,
+    "D2": 2.0 / 3.0,
+    "D3": 1.0 / 3.0,
+    "D4": 0.0,
+}
+
+
 def smooth_threshold(weight, threshold: float, blend_width: float):
     """Map vertex weights to a stable 0..1 enamel fraction."""
 
@@ -86,6 +94,164 @@ def painted_bone_values(
     )
     fraction = np.asarray(paint, dtype=np.float64) * np.asarray(shell, dtype=np.float64)
     values = float(cancellous_hu) + fraction * (float(cortical_hu) - float(cancellous_hu))
+    return np.clip(np.rint(values), MIN_HU_VALUE, MAX_HU_VALUE).astype(np.int16)
+
+
+def bone_density_fraction(base_density: str, target_density: str, paint_weight):
+    """Blend a D1-D4 density preset continuously using raw paint weights.
+
+    D1 maps to 1.0 (densest) and D4 to 0.0 (most porous). Weight paint is
+    deliberately continuous: zero retains the object-wide base preset, one
+    reaches the painted target, and intermediate weights use smoothstep.
+    """
+
+    base = BONE_DENSITY_FRACTIONS.get(str(base_density), BONE_DENSITY_FRACTIONS["D2"])
+    target = BONE_DENSITY_FRACTIONS.get(str(target_density), BONE_DENSITY_FRACTIONS["D1"])
+    weight = np.clip(np.asarray(paint_weight, dtype=np.float64), 0.0, 1.0)
+    smooth_weight = weight * weight * (3.0 - 2.0 * weight)
+    return base + smooth_weight * (target - base)
+
+
+def _value_noise_3d(x, y, z):
+    """Vectorised, deterministic 3D value noise with smooth interpolation."""
+
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    ix = np.floor(x)
+    iy = np.floor(y)
+    iz = np.floor(z)
+    fx = x - ix
+    fy = y - iy
+    fz = z - iz
+    # Quintic fade produces continuous first and second derivatives and avoids
+    # visible lattice boundaries in the resulting DICOM slices.
+    ux = fx * fx * fx * (fx * (fx * 6.0 - 15.0) + 10.0)
+    uy = fy * fy * fy * (fy * (fy * 6.0 - 15.0) + 10.0)
+    uz = fz * fz * fz * (fz * (fz * 6.0 - 15.0) + 10.0)
+
+    def hashed(dx, dy, dz):
+        phase = ((ix + dx) * 127.1 + (iy + dy) * 311.7 + (iz + dz) * 74.7)
+        return np.mod(np.sin(phase) * 43758.5453123, 1.0)
+
+    def lerp(a, b, amount):
+        return a + amount * (b - a)
+
+    n000 = hashed(0.0, 0.0, 0.0)
+    n100 = hashed(1.0, 0.0, 0.0)
+    n010 = hashed(0.0, 1.0, 0.0)
+    n110 = hashed(1.0, 1.0, 0.0)
+    n001 = hashed(0.0, 0.0, 1.0)
+    n101 = hashed(1.0, 0.0, 1.0)
+    n011 = hashed(0.0, 1.0, 1.0)
+    n111 = hashed(1.0, 1.0, 1.0)
+    nx00 = lerp(n000, n100, ux)
+    nx10 = lerp(n010, n110, ux)
+    nx01 = lerp(n001, n101, ux)
+    nx11 = lerp(n011, n111, ux)
+    return lerp(lerp(nx00, nx10, uy), lerp(nx01, nx11, uy), uz)
+
+
+def _noise_texture_3d(x_mm, y_mm, z_mm, scale: float):
+    """Approximate Blender's 3D fBM Noise Texture for voxel coordinates.
+
+    The default scale of 25 corresponds to roughly two-millimetre base
+    features in the dental coordinate system. Three octaves reproduce a
+    Detail value near 2 with Roughness 0.5 while fixed coordinate rotation
+    prevents axis-aligned or grid-like repetition.
+    """
+
+    frequency = max(1.0, float(scale)) / 50.0
+    x = np.asarray(x_mm, dtype=np.float64) * frequency
+    y = np.asarray(y_mm, dtype=np.float64) * frequency
+    z = np.asarray(z_mm, dtype=np.float64) * frequency
+    # Fixed oblique transform breaks alignment between the value-noise lattice
+    # and the DICOM voxel grid without introducing run-to-run randomness.
+    xr = 0.819 * x + 0.401 * y + 0.407 * z
+    yr = -0.512 * x + 0.843 * y + 0.167 * z
+    zr = -0.263 * x - 0.356 * y + 0.897 * z
+    result = np.zeros_like(xr, dtype=np.float64)
+    amplitude = 1.0
+    amplitude_sum = 0.0
+    octave_frequency = 1.0
+    for _octave in range(3):
+        result += amplitude * _value_noise_3d(
+            xr * octave_frequency,
+            yr * octave_frequency,
+            zr * octave_frequency,
+        )
+        amplitude_sum += amplitude
+        amplitude *= 0.5
+        octave_frequency *= 2.0
+    return result / amplitude_sum
+
+
+def synthetic_bone_values(
+    cortical_depth_mm,
+    cortical_weight,
+    x_mm,
+    y_mm,
+    z_mm,
+    density_paint_weight,
+    *,
+    base_density: str = "D2",
+    target_density: str = "D1",
+    cortical_thickness_mm: float = 2.0,
+    cortical_transition_mm: float = 0.5,
+    cortical_weight_blend: float = 0.2,
+    cortical_hu: float = 800.0,
+    pattern_enabled: bool = True,
+    pattern_scale_mm: float = 25.0,
+    pattern_strength: float = 1.0,
+    voxel_radius_mm: float = 0.0,
+):
+    """Return closed-volume bone HU with painted density and trabeculae.
+
+    This function changes intensity only; it never changes the occupancy mask.
+    The coordinate field is deterministic, so identical geometry and settings
+    produce identical intersecting trabecular struts on every export.
+    """
+
+    density = bone_density_fraction(base_density, target_density, density_paint_weight)
+    # Educational synthetic anchors, not scanner-calibrated clinical HU. They
+    # are used only when the pattern is disabled or partially blended.
+    uniform_hu = 50.0 + 450.0 * density
+
+    if bool(pattern_enabled) and float(pattern_strength) > 1e-9:
+        noise = _noise_texture_3d(x_mm, y_mm, z_mm, pattern_scale_mm)
+        # D1 lowers the factor threshold and therefore retains more of the
+        # noise field as trabeculae. D4 raises it and leaves more void/marrow.
+        # The transition band makes both spatial and painted boundaries smooth.
+        threshold = 0.42 + 0.24 * (1.0 - density)
+        # A broad transition preserves the soft, cloud-like grayscale of a
+        # Blender Noise Texture instead of turning it into a binary speckle.
+        width = 0.35
+        network = np.clip((noise - threshold + 0.5 * width) / width, 0.0, 1.0)
+        network = network * network * (3.0 - 2.0 * network)
+        # Marrow remains constant across D1-D4. Density painting changes the
+        # amount and brightness of trabeculae instead of tinting a whole
+        # painted region darker. Even D1 remains below the 800-HU cortex.
+        marrow_hu = -100.0
+        trabecular_hu = 300.0 + 450.0 * density
+        textured = marrow_hu + network * (trabecular_hu - marrow_hu)
+        strength = np.clip(float(pattern_strength), 0.0, 1.0)
+        cancellous = uniform_hu + strength * (textured - uniform_hu)
+    else:
+        cancellous = uniform_hu
+
+    raw_cortical_weight = np.asarray(cortical_weight, dtype=np.float64)
+    cortical_paint = smooth_threshold(
+        raw_cortical_weight, 0.05, cortical_weight_blend
+    )
+    cortical_paint = np.where(raw_cortical_weight > 0.0, cortical_paint, 0.0)
+    cortical_shell = sampled_layer_fraction(
+        cortical_depth_mm,
+        cortical_thickness_mm,
+        cortical_transition_mm,
+        voxel_radius_mm,
+    )
+    cortical_fraction = cortical_paint * cortical_shell
+    values = cancellous + cortical_fraction * (float(cortical_hu) - cancellous)
     return np.clip(np.rint(values), MIN_HU_VALUE, MAX_HU_VALUE).astype(np.int16)
 
 
@@ -301,6 +467,8 @@ __all__ = [
     "layered_bone_values",
     "layered_bone_values_from_depth",
     "painted_bone_values",
+    "bone_density_fraction",
+    "synthetic_bone_values",
     "textured_bone_values",
     "smooth_threshold",
     "sampled_layer_fraction",

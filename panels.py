@@ -316,6 +316,18 @@ class VIEW3D_PT_dicomator_per_object_hu(Panel):
                 material_key = getattr(obj, "dicomator_material", "CUSTOM")
                 dental_mode = getattr(obj, "dicomator_dental_mode", "UNIFORM")
                 if dental_mode == "BONE" or material_key == "BONE":
+                    col.prop(obj, "dicomator_bone_density_base")
+                    col.prop(obj, "dicomator_enable_bone_density_paint")
+                    if getattr(obj, "dicomator_enable_bone_density_paint", False):
+                        density = col.column(align=True)
+                        _paint_mode_buttons(density, "BoneDensity")
+                        density.prop(obj, "dicomator_bone_density_target")
+                    col.prop(obj, "dicomator_enable_trabecular_pattern")
+                    if getattr(obj, "dicomator_enable_trabecular_pattern", True):
+                        trabecular = col.column(align=True)
+                        trabecular.prop(obj, "dicomator_trabecular_spacing_mm")
+                        trabecular.prop(obj, "dicomator_trabecular_contrast_hu")
+                    col.separator()
                     col.prop(obj, "dicomator_enable_cortical")
                     if getattr(obj, "dicomator_enable_cortical", True):
                         bone = col.column(align=True)
