@@ -6,7 +6,7 @@
 
 Dental DICOMator is a Blender extension that converts selected 3D meshes into
 synthetic CT DICOM image series for dental education and medical-physics
-research. It is a dental adaptation of DICOMATOR, developed by Michael
+research. It is an adaptation from the original DICOMATOR, developed by Michael
 Douglass. The dental adaptation was developed by Mateus Bertolini.
 
 > [!WARNING]
