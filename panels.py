@@ -455,7 +455,6 @@ class VIEW3D_PT_dicomator_about(Panel):
     def draw(self, context: Context) -> None:  # pragma: no cover - Blender UI code
         layout = self.layout
         layout.label(text="Dental Developer: Mateus Bertolini")
-        layout.label(text="DICOMATOR developer: Michael Douglass")
 
 
 __all__ = [

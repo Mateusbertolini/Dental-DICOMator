@@ -1,6 +1,6 @@
 # Attribution notice
 
-Dental DICOMator is a derivative adaptation of DICOMator, originally developed by Michael John James Douglass, for dental education and research.
+Dental DICOMator is a derivative adaptation of DICOMator, originally developed by Michael John James Douglass. The dental adaptation was developed by Mateus Bertolini and is intendend for dental education and research.
 
 Original publication:
 
